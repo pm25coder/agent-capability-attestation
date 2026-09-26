@@ -98,3 +98,7 @@ if result.is_stale:
 ## License
 
 MIT
+
+# Agent Capability Attestation
+
+![CI](https://github.com/yunaremaia/agent-capability-attestation/actions/workflows/ci.yml/badge.svg)
