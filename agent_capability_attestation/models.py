@@ -154,10 +154,14 @@ class AttestationValidator:
         # deadline is the fallback. Comparing now against the deadline (rather
         # than against ttl_seconds) is what keeps an attestation that declares
         # its own short expiry from being stretched by a long TTL.
-        deadline = attestation.expires_at
-        ttl_deadline = attestation.issued_at + timedelta(
-            seconds=attestation.ttl_seconds
-        )
+        #
+        # Both sides are normalized to UTC first: an Attestation built directly
+        # (bypassing _parse_datetime) can still carry a naive issued_at, and
+        # validate must return a result rather than raise.
+        issued_at = _as_utc(attestation.issued_at)
+        now = _as_utc(self.now)
+        deadline = _as_utc(attestation.expires_at)
+        ttl_deadline = issued_at + timedelta(seconds=attestation.ttl_seconds)
         if deadline != ttl_deadline:
             result.add_warning(
                 f"expires_at {deadline.isoformat()} disagrees with "
@@ -165,8 +169,8 @@ class AttestationValidator:
                 "honoring the declared expiry"
             )
 
-        age = (self.now - attestation.issued_at).total_seconds()
-        remaining = (deadline - self.now).total_seconds()
+        age = (now - issued_at).total_seconds()
+        remaining = (deadline - now).total_seconds()
         if remaining < 0:
             result.is_stale = True
             result.stale_by_seconds = -remaining
@@ -212,12 +216,29 @@ def compute_state_hash(capabilities: dict) -> str:
     return f"sha256:{hashlib.sha256(canonical).hexdigest()}"
 
 
+def _as_utc(value: datetime) -> datetime:
+    """Coerce a datetime to a timezone-aware UTC datetime.
+
+    A naive datetime is interpreted as UTC, which is the consistent reading:
+    the README documents timestamps as UTC-suffixed, so a missing offset is a
+    missing suffix rather than a different timezone.
+    """
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
 def _parse_datetime(value) -> datetime:
-    """Parse an ISO 8601 datetime string."""
+    """Parse an ISO 8601 datetime string, normalizing to UTC.
+
+    Normalizing here covers both input paths — a naive string and a naive
+    ``datetime`` passed programmatically — so a mixed-aware comparison can
+    never be built from a parsed value.
+    """
     if isinstance(value, datetime):
-        return value
+        return _as_utc(value)
     if isinstance(value, str):
-        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+        return _as_utc(datetime.fromisoformat(value.replace("Z", "+00:00")))
     raise ValueError(f"Cannot parse datetime: {value!r}")
 
 
