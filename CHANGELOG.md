@@ -31,6 +31,19 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- `check-mcp` now reports exit `2` for a config whose structure is not the nested
+  JSON object the scanner reads, instead of dying with an uncaught
+  `AttributeError` and exiting `1`. A `"mcpServers"` (or `"servers"`) value that is
+  an array, string, number or null — and a server entry that is not an object —
+  escaped from the walk as a traceback, and the process then exited `1`, the same
+  code a genuine validation failure uses: an operator with a malformed config
+  could not tell it apart from one whose attestations were stale. The scanner
+  raises `McpConfigError` for each of those levels, naming the key and the JSON
+  type it found, and the CLI maps it to exit `2` like its other malformed-input
+  paths. The attestation payload's own shape (`capabilityAttestation` not an
+  object, or missing a required field) is a separate site with the same root
+  cause, reached through `check-chain` as well, and is not covered here.
+
 - `check-chain` never checked TTL, expiry or clock skew: it built an
   `AttestationValidator` from the operator's `--max-ttl` / `--max-skew-seconds`
   and applied only its signature check to each hop, so those options had no

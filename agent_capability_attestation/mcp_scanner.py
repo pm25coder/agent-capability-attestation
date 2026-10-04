@@ -14,6 +14,35 @@ from .models import (
 )
 
 
+class McpConfigError(ValueError):
+    """An MCP config is not the nested JSON object the scanner reads.
+
+    ``check_mcp`` walks a config as *document → server collection → server
+    entry*. When one of those levels is a JSON array, string, number or null
+    the walk escaped as an uncaught ``AttributeError``, which exits 1 — the
+    same code a genuine validation failure uses, so a malformed config was
+    indistinguishable from a stale one. The CLI maps this error to exit 2,
+    which is what its other malformed-input paths already report.
+    """
+
+
+def _json_type(value: Any) -> str:
+    """Name a value's JSON type the way the messages above read it."""
+    if value is None:
+        return "null"
+    if isinstance(value, bool):
+        return "boolean"
+    if isinstance(value, dict):
+        return "object"
+    if isinstance(value, list):
+        return "array"
+    if isinstance(value, str):
+        return "string"
+    if isinstance(value, (int, float)):
+        return "number"
+    return type(value).__name__
+
+
 def check_mcp(
     config_path: str,
     max_ttl: int = 300,
@@ -36,6 +65,10 @@ def check_mcp(
         raise FileNotFoundError(f"MCP config not found: {config_path}")
 
     data = json.loads(path.read_text())
+    if not isinstance(data, dict):
+        raise McpConfigError(
+            f"MCP config must be a JSON object, got {_json_type(data)}"
+        )
     results = []
     validator = AttestationValidator(
         max_ttl=max_ttl,
@@ -47,8 +80,19 @@ def check_mcp(
 
     # MCP configs can list servers under a "mcpServers" or similar key
     servers = data.get("mcpServers", data.get("servers", {}))
+    servers_key = "mcpServers" if "mcpServers" in data else "servers"
+    if not isinstance(servers, dict):
+        raise McpConfigError(
+            f'MCP config "{servers_key}" must be a JSON object, '
+            f"got {_json_type(servers)}"
+        )
 
     for server_name, server_config in servers.items():
+        if not isinstance(server_config, dict):
+            raise McpConfigError(
+                f'MCP server "{server_name}" must be a JSON object, '
+                f"got {_json_type(server_config)}"
+            )
         att_data = server_config.get("capabilityAttestation")
         if att_data is None:
             # No attestation present — create a synthetic one to flag
