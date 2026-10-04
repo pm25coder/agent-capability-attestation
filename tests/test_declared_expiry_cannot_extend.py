@@ -10,10 +10,12 @@ Both directions are pinned here, because a bound that only hardens the long-expi
 regresses #11 (an attestation that declares itself expired must still be honoured): the
 extending direction is an error, the shortening direction is not.
 
-What this fix deliberately does *not* do is make ``max_ttl`` binding — that is #18, its
-contract is pinned by ``test_max_ttl_remains_advisory`` in ``test_future_issued_at.py``,
-and the bound here is the TTL-derived deadline rather than the policy ceiling for exactly
-that reason (see ``TestMaxTtlStaysAdvisory``).
+What this fix deliberately does *not* do is decide the policy ceiling: ``max_ttl`` is
+enforced separately (#18), and the bound here is the TTL-derived deadline rather than the
+policy ceiling so the two stay independent. That separation is also why ``max_ttl`` is
+measured against the resolved deadline rather than against the ``ttl_seconds`` field — an
+attestation like ``_extending()``'s, whose long TTL its own declared expiry cuts short, is
+inside the ceiling by any measure that matters (see ``TestMaxTtlBoundsTheDeadline``).
 """
 
 from __future__ import annotations
@@ -144,29 +146,37 @@ class TestControls:
         assert not any("honoring" in w for w in result.warnings), result.warnings
 
 
-class TestMaxTtlStaysAdvisory:
-    """The bound is the TTL deadline, not the policy ceiling (#18 stays open)."""
+class TestMaxTtlBoundsTheDeadline:
+    """``max_ttl`` is enforced, and it bounds the deadline rather than the TTL field."""
 
-    def test_a_long_ttl_with_no_declared_expiry_still_only_warns(self):
+    def test_a_long_ttl_with_no_declared_expiry_is_rejected(self):
+        """The #18 reproduction: ten years under a 300s ceiling is an error."""
         att = Attestation("i", "s", "CAN_READ(store)", NOW, 31536000)
 
         result = _validator(max_ttl=300).validate(att)
 
-        assert result.is_valid
-        assert any("exceeds max" in w for w in result.warnings)
+        assert not result.is_valid
+        assert not result.is_stale
+        assert any("exceeds max 300s" in e for e in result.errors)
 
-    def test_a_consistent_declaration_longer_than_max_ttl_still_only_warns(self):
-        """An honest attestation whose own expiry matches its own TTL is consistent, so
-        this fix has no opinion about it; making ``max_ttl`` bind it is #18's change."""
+    def test_a_declared_expiry_that_shortens_the_ttl_keeps_it_inside_the_ceiling(
+        self
+    ):
+        """The two bounds must not fight: a short declared expiry wins over a long TTL.
+
+        This is the interaction between #18 and the ``expires_at`` rule this module
+        pins. Measured against the field, this attestation — dead ten seconds after
+        it is issued — would be rejected for a TTL it never gets to use.
+        """
         att = Attestation(
-            "i", "s", "CAN_READ(store)", NOW, 86_400,
-            expires_at=NOW + timedelta(seconds=86_400),
+            "i", "s", "CAN_READ(store)", NOW, 86_400 * 365,
+            expires_at=NOW + timedelta(seconds=10),
         )
 
         result = _validator(max_ttl=300).validate(att)
 
         assert result.is_valid
-        assert any("exceeds max" in w for w in result.warnings)
+        assert result.errors == []
 
 
 def _write(tmp_path, name, payload):

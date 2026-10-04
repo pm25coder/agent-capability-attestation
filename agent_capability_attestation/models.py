@@ -195,7 +195,12 @@ class AttestationValidator:
     """Validate capability attestations with TTL and signature checking.
 
     Args:
-        max_ttl: TTLs above this are reported as a warning, not an error.
+        max_ttl: Policy ceiling on how long an attestation may live, in
+            seconds. Exceeding it is an error (``is_valid`` becomes ``False``).
+            The ceiling is measured against the deadline ``validate`` actually
+            uses — the declared ``expires_at`` when present, otherwise
+            ``issued_at + ttl_seconds`` — so an attestation whose own declared
+            expiry cuts a long ``ttl_seconds`` short is still inside it.
         now: Freeze the validation clock (tests).
         trusted_keys: Ed25519 public keys keyed by issuer. The special key
             ``ANY_ISSUER`` ("*") matches any issuer. An attestation carrying a
@@ -206,6 +211,10 @@ class AttestationValidator:
             default so the documented unsigned workflow keeps working; the
             verdict is still surfaced as ``signature_status == "unsigned"``
             plus a warning, so a caller can see what was not checked.
+        enforce_max_ttl: Report an over-ceiling deadline as an error (the
+            default) rather than as a warning. The escape hatch exists for an
+            operator who knowingly runs a permissive policy; the default exists
+            because a bound that only warns is not a bound.
     """
 
     def __init__(
@@ -215,6 +224,7 @@ class AttestationValidator:
         max_skew_seconds: int = DEFAULT_MAX_SKEW_SECONDS,
         trusted_keys: Optional[Mapping[str, ed25519.Ed25519PublicKey]] = None,
         require_signature: bool = False,
+        enforce_max_ttl: bool = True,
     ) -> None:
         self.max_ttl = max_ttl
         self._now = now
@@ -223,6 +233,7 @@ class AttestationValidator:
             trusted_keys or {}
         )
         self.require_signature = require_signature
+        self.enforce_max_ttl = enforce_max_ttl
 
     @property
     def now(self) -> datetime:
@@ -249,11 +260,6 @@ class AttestationValidator:
             result.add_error("Missing TTL — attestation considered expired (fail closed)")
             result.is_stale = True
             return result
-
-        if attestation.ttl_seconds > self.max_ttl:
-            result.add_warning(
-                f"TTL {attestation.ttl_seconds}s exceeds max {self.max_ttl}s"
-            )
 
         # A declared expires_at may shorten an attestation's life but never
         # extend it: when it is present and later than the TTL-derived deadline
@@ -301,6 +307,34 @@ class AttestationValidator:
                 f"issued_at + ttl_seconds ({ttl_deadline.isoformat()}); "
                 "honoring the declared expiry"
             )
+
+        # ``max_ttl`` is the operator's policy ceiling and is enforced rather
+        # than narrated (#18): an attestation that can outlive
+        # ``issued_at + max_ttl`` is rejected. A missing TTL was already fail
+        # closed, and an oversized one was not — which is the more dangerous
+        # half, because raising a number in the file is all it takes.
+        #
+        # The comparison is against ``deadline``, the deadline this function
+        # actually uses, not against the nominal ``ttl_seconds`` field: a
+        # declared ``expires_at`` may legitimately shorten a long TTL, and
+        # rejecting such an attestation would undo that rule. An attestation
+        # whose *life* is inside the ceiling is inside the ceiling, whatever
+        # its TTL field says.
+        policy_deadline = issued_at + timedelta(seconds=self.max_ttl)
+        if deadline > policy_deadline:
+            message = (
+                f"TTL {attestation.ttl_seconds}s exceeds max {self.max_ttl}s — "
+                f"expires_at {deadline.isoformat()} is "
+                f"{(deadline - policy_deadline).total_seconds():.0f}s past "
+                f"issued_at + max_ttl ({policy_deadline.isoformat()})"
+            )
+            if self.enforce_max_ttl:
+                result.add_error(
+                    f"{message}; max_ttl is a policy ceiling, not a note — "
+                    "rejecting"
+                )
+            else:
+                result.add_warning(message)
 
         remaining = (deadline - now).total_seconds()
         if remaining < 0:

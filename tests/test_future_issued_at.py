@@ -254,8 +254,8 @@ class TestUnchangedBehaviour:
             att
         ).is_valid
 
-    def test_max_ttl_remains_advisory(self):
-        """Not in scope here: an over-ceiling TTL still only warns (#18)."""
+    def test_max_ttl_is_enforced_not_advisory(self):
+        """An over-ceiling TTL is an error, not a note (#18)."""
         now = datetime(2026, 9, 21, 12, 0, tzinfo=timezone.utc)
         att = Attestation.from_dict(
             _attestation(issued_at=now.isoformat(), ttl_seconds=31536000)
@@ -263,8 +263,9 @@ class TestUnchangedBehaviour:
 
         result = AttestationValidator(now=now, max_ttl=300).validate(att)
 
-        assert result.is_valid
-        assert any("exceeds max" in w for w in result.warnings)
+        assert not result.is_valid
+        assert not result.is_stale
+        assert any("exceeds max 300s" in e for e in result.errors)
 
 
 class TestFutureIssuedAtThroughTheCli:
@@ -296,7 +297,7 @@ class TestFutureIssuedAtThroughTheCli:
 
         assert "ERROR reading" not in result.output
         assert "in the future" in result.output
-        assert "1 attestations scanned, 1 stale" in result.output
+        assert "1 attestations scanned, 1 invalid (0 stale)" in result.output
 
     def test_max_skew_option_widens_the_window(self, tmp_path):
         path = tmp_path / "future.attestation.json"

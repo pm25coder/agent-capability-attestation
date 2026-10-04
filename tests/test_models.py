@@ -85,7 +85,8 @@ class TestAttestation:
         result = validator.validate(att)
         assert result.is_valid
 
-    def test_ttl_exceeds_max_warning(self):
+    def test_ttl_exceeds_max_is_an_error(self):
+        """``max_ttl`` is a policy ceiling, so exceeding it fails validation (#18)."""
         now = datetime(2026, 9, 21, 12, 0, 0, tzinfo=timezone.utc)
         data = {
             "issuer": "a",
@@ -95,12 +96,32 @@ class TestAttestation:
             "ttl_seconds": 600,
         }
         att = Attestation.from_dict(data)
-        validator = AttestationValidator(max_ttl=300, now=now)
-        result = validator.validate(att)
+        result = AttestationValidator(max_ttl=300, now=now).validate(att)
+
+        assert not result.is_valid
+        # The attestation is fresh; it is the ceiling it breaks, not its age.
+        assert not result.is_stale
+        # Asserted by content, not by count or position: a rejected
+        # attestation also carries the signature verdict.
+        assert any("exceeds max 300s" in e for e in result.errors)
+
+    def test_a_ttl_inside_max_is_still_valid(self):
+        """Positive control for the ceiling: a TTL at the limit is inside it."""
+        now = datetime(2026, 9, 21, 12, 0, 0, tzinfo=timezone.utc)
+        att = Attestation.from_dict(
+            {
+                "issuer": "a",
+                "subject": "b",
+                "capability": "X",
+                "issued_at": "2026-09-21T12:00:00+00:00",
+                "ttl_seconds": 300,
+            }
+        )
+
+        result = AttestationValidator(max_ttl=300, now=now).validate(att)
+
         assert result.is_valid
-        # Asserted by content, not by count or position: an unsigned
-        # attestation also warns that its signature was not verified.
-        assert any("exceeds max" in w for w in result.warnings)
+        assert result.errors == []
 
 
 class TestDelegationChain:

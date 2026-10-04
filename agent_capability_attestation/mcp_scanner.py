@@ -50,6 +50,7 @@ def check_mcp(
     max_skew_seconds: int = DEFAULT_MAX_SKEW_SECONDS,
     trusted_keys: Any = None,
     require_signature: bool = False,
+    enforce_max_ttl: bool = True,
 ) -> list["ValidationResult"]:
     """Scan an MCP server configuration for capability attestations.
 
@@ -76,6 +77,7 @@ def check_mcp(
         max_skew_seconds=max_skew_seconds,
         trusted_keys=trusted_keys,
         require_signature=require_signature,
+        enforce_max_ttl=enforce_max_ttl,
     )
 
     # MCP configs can list servers under a "mcpServers" or similar key

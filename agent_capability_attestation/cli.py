@@ -58,6 +58,19 @@ _TRUST_OPTIONS = [
     ),
 ]
 
+# ``--max-ttl`` is a policy ceiling, so exceeding it is an error by default
+# (#18). This opt-in restores the old advisory behaviour for an operator who
+# wants it — deliberately, rather than as the only thing the flag does.
+_WARN_ON_EXCEEDING_MAX_TTL = click.option(
+    "--warn-on-exceeding-max-ttl",
+    is_flag=True,
+    help=(
+        "Report an attestation that can outlive --max-ttl as a warning "
+        "instead of an error. Off by default: --max-ttl is a policy "
+        "ceiling, so a life beyond it is rejected."
+    ),
+)
+
 
 @cli.command()
 @click.argument("file", type=click.Path(exists=True))
@@ -69,6 +82,7 @@ _TRUST_OPTIONS = [
     help=SKEW_HELP,
 )
 @click.option("--json-output", "json_output", is_flag=True, help="Output as JSON")
+@_WARN_ON_EXCEEDING_MAX_TTL
 @_TRUST_OPTIONS[0]
 @_TRUST_OPTIONS[1]
 def validate(
@@ -76,6 +90,7 @@ def validate(
     max_ttl: int,
     max_skew_seconds: int,
     json_output: bool,
+    warn_on_exceeding_max_ttl: bool,
     public_key_file: Optional[str],
     require_signature: bool,
 ) -> None:
@@ -84,7 +99,11 @@ def validate(
     attestation = Attestation.from_dict(data)
 
     validator = _build_validator(
-        max_ttl, max_skew_seconds, public_key_file, require_signature
+        max_ttl,
+        max_skew_seconds,
+        public_key_file,
+        require_signature,
+        warn_on_exceeding_max_ttl,
     )
     result = validator.validate(attestation)
 
@@ -123,6 +142,7 @@ def validate(
     ),
 )
 @click.option("--json-output", "json_output", is_flag=True, help="Output as JSON")
+@_WARN_ON_EXCEEDING_MAX_TTL
 @_TRUST_OPTIONS[0]
 @_TRUST_OPTIONS[1]
 def scan(
@@ -132,6 +152,7 @@ def scan(
     report_only: bool,
     fail_on_stale: bool,
     json_output: bool,
+    warn_on_exceeding_max_ttl: bool,
     public_key_file: Optional[str],
     require_signature: bool,
 ) -> None:
@@ -159,7 +180,11 @@ def scan(
     all_valid = True
 
     validator = _build_validator(
-        max_ttl, max_skew_seconds, public_key_file, require_signature
+        max_ttl,
+        max_skew_seconds,
+        public_key_file,
+        require_signature,
+        warn_on_exceeding_max_ttl,
     )
 
     for f in attestation_files:
@@ -179,9 +204,11 @@ def scan(
     else:
         for result in results:
             _print_result(result)
+        invalid = [r for r in results if not r.is_valid]
         click.echo(
             f"\n{len(results)} attestations scanned, "
-            f"{sum(1 for r in results if not r.is_valid)} stale"
+            f"{len(invalid)} invalid "
+            f"({sum(1 for r in invalid if r.is_stale)} stale)"
         )
 
     # The default is fail-closed. Before this, --fail-on-stale was the *only*
@@ -205,12 +232,14 @@ def scan(
     type=int,
     help=SKEW_HELP,
 )
+@_WARN_ON_EXCEEDING_MAX_TTL
 @_TRUST_OPTIONS[0]
 @_TRUST_OPTIONS[1]
 def check_chain(
     file: str,
     max_ttl: int,
     max_skew_seconds: int,
+    warn_on_exceeding_max_ttl: bool,
     public_key_file: Optional[str],
     require_signature: bool,
 ) -> None:
@@ -224,7 +253,11 @@ def check_chain(
     attestations = [Attestation.from_dict(item) for item in data]
     chain = DelegationChain(attestations=attestations)
     validator = _build_validator(
-        max_ttl, max_skew_seconds, public_key_file, require_signature
+        max_ttl,
+        max_skew_seconds,
+        public_key_file,
+        require_signature,
+        warn_on_exceeding_max_ttl,
     )
 
     results = chain.validate_monotonicity(validator=validator)
@@ -250,6 +283,7 @@ def check_chain(
     help=SKEW_HELP,
 )
 @click.option("--json-output", "json_output", is_flag=True, help="Output as JSON")
+@_WARN_ON_EXCEEDING_MAX_TTL
 @_TRUST_OPTIONS[0]
 @_TRUST_OPTIONS[1]
 def check_mcp(
@@ -257,6 +291,7 @@ def check_mcp(
     max_ttl: int,
     max_skew_seconds: int,
     json_output: bool,
+    warn_on_exceeding_max_ttl: bool,
     public_key_file: Optional[str],
     require_signature: bool,
 ) -> None:
@@ -269,6 +304,7 @@ def check_mcp(
             max_skew_seconds=max_skew_seconds,
             trusted_keys=trusted_keys,
             require_signature=require_signature,
+            enforce_max_ttl=not warn_on_exceeding_max_ttl,
         )
     except FileNotFoundError as e:
         click.echo(f"ERROR: {e}", err=True)
@@ -334,6 +370,7 @@ def _build_validator(
     max_skew_seconds: int,
     public_key_file: Optional[str],
     require_signature: bool,
+    warn_on_exceeding_max_ttl: bool = False,
 ) -> AttestationValidator:
     """Construct a validator wired to the operator's trust configuration."""
     return AttestationValidator(
@@ -341,6 +378,7 @@ def _build_validator(
         max_skew_seconds=max_skew_seconds,
         trusted_keys=_load_trusted_keys(public_key_file),
         require_signature=require_signature,
+        enforce_max_ttl=not warn_on_exceeding_max_ttl,
     )
 
 

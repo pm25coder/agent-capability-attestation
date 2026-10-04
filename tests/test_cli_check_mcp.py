@@ -64,16 +64,39 @@ class TestCheckMcp:
         assert payload[0]["capability"] == "MCP_SERVER_ATTACHED:filesystem"
 
     def test_max_ttl_option_is_forwarded_to_the_scanner(self, tmp_path):
-        """--max-ttl must reach the scanner, not be dropped or misrouted."""
+        """--max-ttl must reach the scanner, not be dropped or misrouted.
+
+        Forwarding is proved by the ceiling *failing* the run: the option is a
+        policy ceiling now, so a 600s TTL under ``--max-ttl 300`` exits 1 (#18).
+        """
         path = _write_config(tmp_path, ttl_seconds=600)
 
         result = CliRunner().invoke(
             cli, ["check-mcp", str(path), "--max-ttl", "300"]
         )
 
-        assert result.exit_code == 0, result.output
-        # TTL 600s over max 300s is a warning, and the attestation is fresh.
+        assert result.exit_code == 1, result.output
         assert "exceeds max 300s" in result.output
+
+    def test_warn_on_exceeding_max_ttl_restores_the_advisory_behaviour(
+        self, tmp_path
+    ):
+        """The opt-in keeps the old behaviour reachable — deliberately, not by default."""
+        path = _write_config(tmp_path, ttl_seconds=600)
+
+        result = CliRunner().invoke(
+            cli,
+            [
+                "check-mcp",
+                str(path),
+                "--max-ttl",
+                "300",
+                "--warn-on-exceeding-max-ttl",
+            ],
+        )
+
+        assert result.exit_code == 0, result.output
+        assert "WARN: TTL 600s exceeds max 300s" in result.output
 
     def test_stale_attestation_exits_one(self, tmp_path):
         path = _write_config(tmp_path, ttl_seconds=1, age=600)

@@ -126,12 +126,19 @@ class TestDeclaredExpiresAtIsAuthoritative:
         assert result.is_stale
         assert result.stale_by_seconds == pytest.approx(3540.0)
 
-    def test_ttl_exceeding_max_still_only_warns(self):
-        """The TTL warning is unchanged; only the deadline is now authoritative."""
+    def test_a_short_declared_expiry_keeps_a_long_ttl_inside_the_ceiling(self):
+        """The ceiling bounds an attestation's *life*, not its ``ttl_seconds`` field.
+
+        ``_declaring_short_expiry()`` carries a one-year TTL and a ten-second
+        declared expiry, so it is dead long before any sane ceiling. The ceiling is
+        measured against the resolved deadline for exactly this reason: measuring
+        the field instead would reject this attestation and undo the fix this
+        module exists for.
+        """
         att = Attestation.from_dict(_declaring_short_expiry())
         now = datetime(2026, 9, 21, 12, 0, 5, tzinfo=timezone.utc)
 
         result = AttestationValidator(now=now).validate(att)
 
         assert result.is_valid
-        assert any("exceeds max" in w for w in result.warnings)
+        assert not any("exceeds max" in e for e in result.errors)
