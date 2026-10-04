@@ -21,7 +21,8 @@ When Agent A delegates a task to Agent B, the capability attestation that author
 2. **Are fresh** — TTL must not have expired at validation time
 3. **Match the current agent state** — the state hash must match the agent's current declared capabilities
 4. **Delegate monotonically** — each hop in a delegation chain must narrow (never expand) the scope
-5. **Fail closed** — missing TTL = expired attestation (assume stale unless freshly attested)
+5. **Fail closed** — missing TTL = expired attestation (assume stale unless freshly attested),
+   and a life longer than the configured `--max-ttl` ceiling is rejected rather than noted
 
 ## Installation
 
@@ -85,7 +86,9 @@ $ echo $?
 ```
 
 `--max-ttl` and `--max-skew-seconds` apply to every hop, exactly as they do for `validate`
-and `scan`. A chain in which every hop is live and every hop narrows the scope exits `0`.
+and `scan`. `--max-ttl` is a policy ceiling, so a hop that can outlive it exits `1` — see
+[Max TTL](#max-ttl). A chain in which every hop is live, inside the ceiling, and narrowing
+exits `0`.
 
 ## Clock Skew
 
@@ -127,6 +130,34 @@ $ echo $?
 The bound is exact rather than a tolerance, because a tolerance could only come from
 `--max-skew-seconds`, which is operator-controlled: widening the clock-skew window must not
 widen what a declaration is allowed to claim.
+
+## Max TTL
+
+`--max-ttl` (default `300`) is a **policy ceiling** on how long an attestation may live, and it
+is enforced rather than reported: an attestation that can outlive `issued_at + max_ttl` is
+rejected. A missing TTL was always fail-closed; the ceiling was the one TTL rule that only
+printed a line, which is the more dangerous half — raising a number in the file was all it
+took to defeat the freshness policy, and the CI recipe below passed it.
+
+```console
+$ aca validate huge_ttl.attestation.json
+✗ INVALID | agent://planner → agent://worker | CAN_WRITE(root) (TTL 315360000s)
+    signature: UNSIGNED — NOT VERIFIED
+    ERROR: TTL 315360000s exceeds max 300s — expires_at 2036-09-27T12:00:00+00:00 is 315359700s past issued_at + max_ttl (2026-09-30T12:05:00+00:00); max_ttl is a policy ceiling, not a note — rejecting
+    WARN: Unsigned attestation — signature not verified; pass trusted_keys to verify it, or require_signature=True to reject unsigned attestations
+$ echo $?
+1
+```
+
+The ceiling is measured against the deadline the validator actually uses: the declared
+`expires_at` when there is one, otherwise `issued_at + ttl_seconds`. Measuring the resolved
+deadline rather than the `ttl_seconds` field is deliberate — a declared expiry that shortens a
+long TTL is the rule under [Declared Expiry](#declared-expiry), and rejecting such an
+attestation would undo it.
+
+`--warn-on-exceeding-max-ttl` restores the advisory behaviour, and
+`AttestationValidator(enforce_max_ttl=False)` is its library equivalent. `--max-ttl 0` is a
+valid, if maximally strict, setting: no attestation life is acceptable.
 
 ## Signature Verification
 

@@ -44,9 +44,25 @@ All notable changes to this project will be documented in this file.
   the verdict is `STALE` rather than merely `INVALID`. The opposite direction is
   unchanged: an attestation that declares itself expired is still honoured even
   when its TTL has not run out (#11), and a live chain hop with a declared expiry
-  in the past is still rejected (#22). `max_ttl` itself remains advisory — that is
-  #18, and the bound here is the TTL-derived deadline rather than the policy
-  ceiling so that #18's contract is not changed by this fix.
+  in the past is still rejected (#22). `max_ttl` was left advisory by this fix;
+  it is enforced now, and the bound here stays the TTL-derived deadline rather
+  than the policy ceiling so the two remain independent.
+
+- `max_ttl` is enforced instead of narrated (#18). `AttestationValidator(max_ttl=...)` —
+  the `--max-ttl` option on `validate`, `scan`, `check-chain` and `check-mcp` — appended a
+  warning and left `is_valid` `True`, so an attestation declaring `ttl_seconds: 315360000`
+  (ten years) was reported `✓ VALID` under a 300-second ceiling, `errors` was empty and
+  `aca validate` exited `0`. A missing TTL was fail-closed; the TTL *ceiling* was the one TTL
+  rule that was not, which is the more dangerous half — an attacker who can edit the file only
+  has to raise the number, and the README's own CI recipe (`aca scan ./agents/ --fail-on-stale`)
+  passed it. An attestation that can outlive `issued_at + max_ttl` is now an error (`is_valid`
+  `False`, exit `1`). The ceiling is measured against the deadline the validator uses — the
+  declared `expires_at` when present, otherwise `issued_at + ttl_seconds` — rather than against
+  the `ttl_seconds` field, because a declared expiry that shortens a long TTL is the rule
+  above, and rejecting such an attestation would undo it. `--warn-on-exceeding-max-ttl` (and
+  `enforce_max_ttl=False` on the validator) restores the advisory behaviour as a deliberate
+  opt-in. `aca scan`'s summary now reports the invalid count and breaks out how many of those
+  are stale, so it no longer calls a future-dated attestation "stale".
 
 - `aca scan` now exits `1` when any attestation it scanned is invalid, instead
   of exiting `0` unless `--fail-on-stale` was passed. The verdict lines were

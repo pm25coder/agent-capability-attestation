@@ -130,7 +130,7 @@ class TestNaiveIssuedAtThroughTheCli:
 
         assert "ERROR reading" not in result.output
         assert "STALE" in result.output
-        assert "1 attestations scanned, 1 stale" in result.output
+        assert "1 attestations scanned, 1 invalid (1 stale)" in result.output
 
 
 class TestUnparseableTimestampDoesNotCrashValidate:

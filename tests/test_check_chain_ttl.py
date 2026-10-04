@@ -322,14 +322,25 @@ class TestMonotonicityAndFreshnessAreMerged:
 class TestOptionsAdvertisedInHelpNowHaveEffect:
     """``--max-ttl`` and ``--max-skew-seconds`` are documented for this command."""
 
-    def test_max_ttl_still_warns_through_the_chain(self, tmp_path):
-        """An over-ceiling TTL is advisory everywhere, chain included (#18)."""
+    def test_max_ttl_is_enforced_through_the_chain(self, tmp_path):
+        """The ceiling binds per hop on the chain path too (#18)."""
         path = _write(tmp_path, _fresh_chain(ttl_seconds=31536000))
 
         result = _check_chain(path, "--max-ttl", "300")
 
+        assert result.exit_code == 1, result.output
+        assert "exceeds max 300s" in result.output
+
+    def test_warn_on_exceeding_max_ttl_keeps_a_chain_live(self, tmp_path):
+        """The opt-in is reachable on this command, not only on ``validate``."""
+        path = _write(tmp_path, _fresh_chain(ttl_seconds=31536000))
+
+        result = _check_chain(
+            path, "--max-ttl", "300", "--warn-on-exceeding-max-ttl"
+        )
+
         assert result.exit_code == 0, result.output
-        assert "exceeds max" in result.output
+        assert "WARN: TTL 31536000s exceeds max 300s" in result.output
 
     def test_max_skew_seconds_widens_the_window_through_the_chain(self, tmp_path):
         """The option must reach the chain path, not just ``validate``."""
@@ -354,14 +365,17 @@ class TestOptionsAdvertisedInHelpNowHaveEffect:
         assert wide.exit_code == 0, wide.output
 
     def test_max_ttl_zero_does_not_silently_pass_a_chain(self, tmp_path):
-        """``--max-ttl 0`` must not become a blanket pass on the chain path."""
+        """``--max-ttl 0`` means "no life is acceptable", and is now expressible.
+
+        ``0`` was the sharpest reading of the bug: an operator could not express
+        it at all, because every file came back valid plus a warning.
+        """
         path = _write(tmp_path, _fresh_chain())
 
         result = _check_chain(path, "--max-ttl", "0")
 
-        # max_ttl is advisory, so a live chain stays valid — but the warning
-        # proves the option reached the per-hop validator at all.
-        assert "exceeds max" in result.output
+        assert result.exit_code == 1, result.output
+        assert "exceeds max 0s" in result.output
 
 
 class TestUnchangedBehaviour:
