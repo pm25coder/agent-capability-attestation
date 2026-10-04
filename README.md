@@ -105,6 +105,29 @@ Validators do not require a *perfect* clock. A small window absorbs legitimate d
 Widen the window explicitly when a deployment's clock is known to drift. Lowering it toward
 `0` is valid if every host is NTP-locked tightly.
 
+## Declared Expiry
+
+`expires_at` is optional. When it is absent the deadline is `issued_at + ttl_seconds`, and
+that derived deadline is the ceiling the `ttl_seconds` policy is measured against.
+
+A declared `expires_at` may **shorten** an attestation's life — an attestation that says it
+expired is honoured even when its TTL has not run out — but it may never **extend** it. A
+declared expiry later than `issued_at + ttl_seconds` is an internally inconsistent record,
+and it is resolved against the longer life:
+
+```console
+$ aca validate forged.attestation.json
+✗ STALE | agent://planner → agent://attacker | CAN_DELETE_ALL(state) (TTL 1s)
+    signature: UNSIGNED — NOT VERIFIED
+    ERROR: expires_at 2099-01-01T00:00:00+00:00 outlives the TTL deadline 2026-09-04T12:00:01+00:00 (issued_at + ttl_seconds 1s) — a declared expiry may shorten an attestation's life but never extend it; rejecting
+$ echo $?
+1
+```
+
+The bound is exact rather than a tolerance, because a tolerance could only come from
+`--max-skew-seconds`, which is operator-controlled: widening the clock-skew window must not
+widen what a declaration is allowed to claim.
+
 ## Signature Verification
 
 An attestation's `signature` is an Ed25519 signature over the whole payload (every field

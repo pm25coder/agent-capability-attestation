@@ -283,7 +283,15 @@ class AttestationValidator:
             return result
 
         ttl_deadline = issued_at + timedelta(seconds=attestation.ttl_seconds)
-        if deadline != ttl_deadline:
+        if deadline > ttl_deadline:
+            result.add_error(
+                f"expires_at {deadline.isoformat()} outlives the TTL deadline "
+                f"{ttl_deadline.isoformat()} (issued_at + ttl_seconds "
+                f"{attestation.ttl_seconds}s) — a declared expiry may shorten an "
+                "attestation's life but never extend it; rejecting"
+            )
+            deadline = ttl_deadline
+        elif deadline != ttl_deadline:
             result.add_warning(
                 f"expires_at {deadline.isoformat()} disagrees with "
                 f"issued_at + ttl_seconds ({ttl_deadline.isoformat()}); "

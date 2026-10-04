@@ -31,6 +31,23 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- A declared `expires_at` can no longer extend an attestation's life past
+  `issued_at + ttl_seconds`. The field is attacker-controlled — it is one of the
+  values an editor of the file chooses — and it was used as *the* deadline, so an
+  attestation issued 30 days ago with `ttl_seconds: 1` and `expires_at: 2099`
+  reported `✓ VALID`, `is_valid` was `True`, `errors` was empty and `aca validate`
+  exited `0`; the only trace was a warning saying the tool was deliberately
+  honouring the declared value. No value of `--max-ttl` closed it, because
+  `max_ttl` is compared against `ttl_seconds`, which no longer decided expiry once
+  the field was present. A declared expiry later than the TTL-derived deadline is
+  now an error, and the staleness reading is recomputed against that deadline, so
+  the verdict is `STALE` rather than merely `INVALID`. The opposite direction is
+  unchanged: an attestation that declares itself expired is still honoured even
+  when its TTL has not run out (#11), and a live chain hop with a declared expiry
+  in the past is still rejected (#22). `max_ttl` itself remains advisory — that is
+  #18, and the bound here is the TTL-derived deadline rather than the policy
+  ceiling so that #18's contract is not changed by this fix.
+
 - `aca scan` now exits `1` when any attestation it scanned is invalid, instead
   of exiting `0` unless `--fail-on-stale` was passed. The verdict lines were
   already correct — a forged signature reported `ERROR: Signature does not match
