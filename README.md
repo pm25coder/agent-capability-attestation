@@ -39,10 +39,69 @@ aca validate attestation.json
 aca scan ./delegation-chain/
 
 # Check MCP server capability attestations
-aca check-mcp mcp-config.json --ttl-max-age 300
+aca check-mcp mcp-config.json --max-ttl 300
 
 # Exit code: 0 = all fresh, 1 = stale/drift detected
 echo $?
+```
+
+## Signature Verification
+
+An attestation's `signature` is an Ed25519 signature over the whole payload
+(every field except `signature` itself). **Validation enforces it.** Swapping
+the capability, subject, TTL or tool schema after signing makes validation
+fail:
+
+```console
+$ aca validate attestation.json --public-key-file issuer-pubkey.hex
+✗ INVALID | agent://planner-v2 → agent://worker-v3 | CAN_DELETE_ALL(state_store) (TTL 120s)
+    signature: NOT VERIFIED
+    ERROR: Signature does not match payload — attestation may be forged
+$ echo $?
+1
+```
+
+`--public-key-file` takes the issuer's Ed25519 public key as 64 hex
+characters:
+
+```bash
+# Publish the key (issuer side)
+python -c "from agent_capability_attestation.models import Attestation; \
+print(priv.public_key().public_bytes(encoding=serialization.Encoding.Raw, \
+format=serialization.PublicFormat.Raw).hex())" > issuer-pubkey.hex
+
+# Consume it (verifier side)
+aca validate attestation.json --public-key-file issuer-pubkey.hex
+```
+
+Both options are accepted by `validate`, `scan`, `check-chain` and
+`check-mcp`.
+
+### What happens without a key
+
+| attestation | default | `--require-signature` |
+|---|---|---|
+| correctly signed | `signature: VERIFIED`, exit 0 | `VERIFIED`, exit 0 |
+| signed but tampered with | `NOT VERIFIED`, **exit 1** | exit 1 |
+| signed, no trusted key for the issuer | `NOT VERIFIED`, **exit 1** | exit 1 |
+| no signature at all | `UNSIGNED — NOT VERIFIED`, warning, exit 0 | **exit 1** |
+
+The rule is: **a signature that cannot be verified is treated as no evidence
+at all and rejected** — accepting it would reintroduce the exact hole the
+signature exists to close. An attestation with *no* signature is a different
+case: it never claimed to be signed, and the unsigned workflow documented
+above keeps working. It is still reported as unverified, and
+`--require-signature` turns it into a hard failure for deployments that demand
+every attestation be signed.
+
+Use `--require-signature` in any gate that trusts the payload:
+
+```yaml
+- name: Validate agent capability attestations
+  run: |
+    pip install git+https://github.com/yunaremaia/agent-capability-attestation.git
+    aca scan ./agents/ --fail-on-stale --require-signature \
+      --public-key-file ./keys/issuer-pubkey.hex
 ```
 
 ## Attestation Schema
@@ -69,21 +128,33 @@ echo $?
 - name: Validate agent capability attestations
   run: |
     pip install git+https://github.com/yunaremaia/agent-capability-attestation.git
-    aca scan ./agents/ --fail-on-stale
+    aca scan ./agents/ --fail-on-stale --require-signature \
+      --public-key-file ./keys/issuer-pubkey.hex
 ```
 
 ### Pre-delegation Check
 
+`AttestationValidator` takes the trusted public keys so the signature is
+verified as part of validation:
+
 ```python
 from agent_capability_attestation import AttestationValidator
 
-validator = AttestationValidator(max_ttl=300)
+validator = AttestationValidator(
+    max_ttl=300,
+    trusted_keys={"agent://planner-v2": planner_public_key},
+)
 result = validator.validate(attestation)
 
 if result.is_stale:
     raise CapabilityExpiredError(
         f"Attestation expired {result.stale_by_seconds}s ago"
     )
+
+# A signed payload that could not be verified is already invalid; an
+# attestation that never claimed a signature is reported as such.
+if result.signature_status != "verified":
+    raise CapabilityNotAttested(result.signature_status)
 ```
 
 ## Roadmap
