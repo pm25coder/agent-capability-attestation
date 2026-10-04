@@ -10,6 +10,7 @@ from typing import Optional
 import click
 from cryptography.hazmat.primitives.asymmetric import ed25519
 
+from .mcp_scanner import McpConfigError
 from .mcp_scanner import check_mcp as scan_mcp_config
 from .models import (
     ANY_ISSUER,
@@ -237,6 +238,9 @@ def check_mcp(
         sys.exit(2)
     except json.JSONDecodeError as e:
         click.echo(f"ERROR: invalid JSON: {e}", err=True)
+        sys.exit(2)
+    except McpConfigError as e:
+        click.echo(f"ERROR: {e}", err=True)
         sys.exit(2)
 
     if json_output:
