@@ -31,6 +31,19 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- `aca scan` now exits `1` when any attestation it scanned is invalid, instead
+  of exiting `0` unless `--fail-on-stale` was passed. The verdict lines were
+  already correct — a forged signature reported `ERROR: Signature does not match
+  payload — attestation may be forged` — but `all_valid` was computed and then
+  discarded at the process boundary, so a CI gate that ran `aca scan ./agents/`
+  and checked the exit status passed a directory full of forged and expired
+  attestations. That made `scan` the only validating command whose exit code
+  disagreed with its own findings (`validate`, `check-chain` and `check-mcp` all
+  fail closed). The default is now fail-closed; `--report-only` is the explicit
+  opt-out, and `--fail-on-stale` is kept as a deprecated, redundant alias for one
+  release so the documented CI recipe keeps working. The two flags are
+  mutually exclusive (exit `2`).
+
 - `check-mcp` now reports exit `2` for a config whose structure is not the nested
   JSON object the scanner reads, instead of dying with an uncaught
   `AttributeError` and exiting `1`. A `"mcpServers"` (or `"servers"`) value that is
