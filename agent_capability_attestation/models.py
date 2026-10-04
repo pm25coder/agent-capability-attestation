@@ -28,6 +28,11 @@ from cryptography.hazmat.primitives.asymmetric import ed25519
 # ``max_skew_seconds`` rather than by shipping a forged receipt.
 DEFAULT_MAX_SKEW_SECONDS = 60
 
+# The algorithm-prefixed form the README's Attestation Schema documents for the
+# ``signature`` field (``"signature": "ed25519:def456..."``). It is accepted on
+# input; what gets signed and verified is always the bare hex digest.
+ED25519_SIGNATURE_PREFIX = "ed25519:"
+
 
 @dataclass
 class Attestation:
@@ -225,9 +230,24 @@ class AttestationValidator:
         removed, serialized with ``json.dumps``. ``exclude`` is not a
         ``json.dumps`` argument, so the field has to be dropped from the
         dict before serialization.
+
+        ``signature`` arrives from a file the attacker can edit, so a verifier
+        that answers a yes/no question has to be total over that input: every
+        malformed shape is ``False``, never an exception. ``bytes.fromhex``
+        raises ``ValueError`` for a string that is not hex (or has odd length),
+        but ``TypeError`` for a value that is not a string at all — a JSON
+        number, array or object — so both are caught. The README's schema
+        documents the algorithm-prefixed form ``"ed25519:<hex>"``; it is
+        accepted alongside the bare hex digest described in the docstring
+        above.
         """
         if not attestation.signature:
             return False
+        signature = attestation.signature
+        if not isinstance(signature, str):
+            return False
+        if signature.startswith(ED25519_SIGNATURE_PREFIX):
+            signature = signature[len(ED25519_SIGNATURE_PREFIX):]
         body = {
             key: value
             for key, value in attestation.to_dict().items()
@@ -235,11 +255,12 @@ class AttestationValidator:
         }
         try:
             data = json.dumps(body).encode()
-            public_key.verify(
-                bytes.fromhex(attestation.signature), data
-            )
+            public_key.verify(bytes.fromhex(signature), data)
             return True
-        except (InvalidSignature, ValueError):
+        except (InvalidSignature, ValueError, TypeError):
+            # TypeError is retained alongside the isinstance() guard on
+            # purpose: it is the same contract, and it also covers a public_key
+            # of the wrong type reaching verify().
             return False
 
 
