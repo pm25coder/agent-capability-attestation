@@ -38,7 +38,8 @@ aca validate attestation.json
 # Widen the accepted clock drift if issuer and validator clocks disagree
 aca validate attestation.json --max-skew-seconds 300
 
-# Scan a delegation chain directory
+# Scan a directory; exits 1 if any attestation it finds is invalid
+# (--report-only forces exit 0 and reports on stdout instead)
 aca scan ./delegation-chain/
 
 # Validate a delegation chain file (array of attestations, in order)
@@ -50,7 +51,8 @@ aca check-mcp mcp-config.json --max-ttl 300
 # Verify the issuer's Ed25519 signature
 aca validate attestation.json --public-key-file issuer-pubkey.hex
 
-# Exit code: 0 = all fresh, 1 = stale/drift detected
+# Exit code: 0 = all fresh, 1 = invalid (stale, forged or unreadable)
+# detected, 2 = malformed input
 echo $?
 ```
 
@@ -173,9 +175,12 @@ that require signed attestations.
 - name: Validate agent capability attestations
   run: |
     pip install git+https://github.com/yunaremaia/agent-capability-attestation.git
-    aca scan ./agents/ --fail-on-stale --require-signature \
+    aca scan ./agents/ --require-signature \
       --public-key-file ./keys/issuer-pubkey.hex
 ```
+
+`aca scan` exits `1` as soon as any attestation is invalid, so the gate needs no
+extra flag; `--report-only` is the opt-out for a non-blocking report.
 
 ### Pre-delegation Check
 

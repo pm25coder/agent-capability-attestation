@@ -105,7 +105,23 @@ def validate(
     type=int,
     help=SKEW_HELP,
 )
-@click.option("--fail-on-stale", is_flag=True, help="Exit 1 if any attestation is stale")
+@click.option(
+    "--report-only",
+    is_flag=True,
+    help=(
+        "Always exit 0 and report findings on stdout only. Off by default: a "
+        "scan fails closed (exit 1) whenever any attestation is invalid."
+    ),
+)
+@click.option(
+    "--fail-on-stale",
+    is_flag=True,
+    help=(
+        "Deprecated and redundant: scan now fails closed on any invalid "
+        "attestation, not only on stale ones. Accepted for backwards "
+        "compatibility."
+    ),
+)
 @click.option("--json-output", "json_output", is_flag=True, help="Output as JSON")
 @_TRUST_OPTIONS[0]
 @_TRUST_OPTIONS[1]
@@ -113,12 +129,25 @@ def scan(
     directory: str,
     max_ttl: int,
     max_skew_seconds: int,
+    report_only: bool,
     fail_on_stale: bool,
     json_output: bool,
     public_key_file: Optional[str],
     require_signature: bool,
 ) -> None:
-    """Scan a directory for attestation files and validate them all."""
+    """Scan a directory for attestation files and validate them all.
+
+    Exits 1 if any attestation is invalid — stale, forged, unverifiable or
+    unreadable — so this command can back a CI gate. Pass ``--report-only`` to
+    always exit 0 and read the findings from stdout instead.
+    """
+    if fail_on_stale and report_only:
+        click.echo(
+            "ERROR: --fail-on-stale and --report-only are mutually exclusive",
+            err=True,
+        )
+        sys.exit(2)
+
     dir_path = Path(directory)
     attestation_files = sorted(dir_path.glob("**/*.attestation.json"))
 
@@ -155,8 +184,16 @@ def scan(
             f"{sum(1 for r in results if not r.is_valid)} stale"
         )
 
-    if fail_on_stale and not all_valid:
+    # The default is fail-closed. Before this, --fail-on-stale was the *only*
+    # way to make a scan fail: a forged or unverifiable attestation printed
+    # `ERROR: ... may be forged` and then exited 0, so a CI gate keyed on the
+    # exit status passed a directory full of forged and expired attestations.
+    # The flag is kept for one release so the documented CI recipe keeps
+    # working, but it is now redundant — --report-only is its explicit
+    # opposite, and the two are rejected together above.
+    if not all_valid and not report_only:
         sys.exit(1)
+    sys.exit(0)
 
 
 @cli.command()
