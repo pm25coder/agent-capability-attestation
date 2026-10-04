@@ -30,7 +30,11 @@ import pytest
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ed25519
 
-from agent_capability_attestation.models import Attestation, AttestationValidator
+from agent_capability_attestation.models import (
+    Attestation,
+    AttestationValidator,
+    canonical_bytes,
+)
 
 ISSUER = "agent://planner-v2"
 
@@ -56,9 +60,13 @@ def _signed(attestation: Attestation, key: ed25519.Ed25519PrivateKey) -> Attesta
 
 
 def _signed_body(attestation: Attestation) -> bytes:
-    """The exact bytes an issuer signs: to_dict() minus the signature field."""
+    """The exact bytes an issuer signs: to_dict() minus the signature field.
+
+    Produced by the library's ``canonical_bytes`` contract — the same bytes the
+    verifier hashes — rather than by ambient ``json.dumps`` defaults.
+    """
     body = {k: v for k, v in attestation.to_dict().items() if k != "signature"}
-    return json.dumps(body).encode()
+    return canonical_bytes(body)
 
 
 def _validator(

@@ -12,6 +12,7 @@ from .models import (
     AttestationValidator,
     DelegationChain,
     ValidationResult,
+    canonical_bytes,
     compute_state_hash,
 )
 
@@ -29,6 +30,7 @@ __all__ = [
     "AttestationValidator",
     "DelegationChain",
     "ValidationResult",
+    "canonical_bytes",
     "compute_state_hash",
     "__version__",
 ]

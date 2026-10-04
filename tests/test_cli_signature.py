@@ -23,6 +23,7 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ed25519
 
 from agent_capability_attestation.cli import cli
+from agent_capability_attestation.models import canonical_bytes
 
 ISSUER = "agent://planner-v2"
 
@@ -40,7 +41,7 @@ def _key_hex(key: ed25519.Ed25519PrivateKey) -> str:
 
 def _signed_body(attestation) -> bytes:
     body = {k: v for k, v in attestation.to_dict().items() if k != "signature"}
-    return json.dumps(body).encode()
+    return canonical_bytes(body)
 
 
 def _attestation(**overrides):

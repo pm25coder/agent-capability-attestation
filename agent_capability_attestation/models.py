@@ -49,6 +49,34 @@ DEFAULT_MAX_SKEW_SECONDS = 60
 ED25519_SIGNATURE_PREFIX = "ed25519:"
 
 
+def canonical_bytes(obj: dict) -> bytes:
+    """Canonical JSON serialization used for signing and hashing.
+
+    This is the single serialization contract: the bytes an issuer signs and
+    the bytes a verifier checks are both produced here, so a signer written in
+    another language (Go, Rust, JS) has exactly one documented form to
+    reproduce. These settings are part of the wire format and must not change
+    without a version bump:
+
+    * ``sort_keys=True`` — key order cannot change the bytes;
+    * ``separators=(",", ":")`` — no insignificant whitespace, so the default
+      ``", "`` / ``": "`` spacing a compact signer does not emit is not a
+      different byte string;
+    * ``ensure_ascii=False`` — UTF-8 output, so a non-ASCII capability or
+      resource name hashes to the same digest regardless of the caller's
+      locale or encoder defaults;
+    * ``allow_nan=False`` — ``NaN``/``Infinity`` are not valid JSON and would
+      produce bytes no other JSON reader accepts, so they are rejected.
+    """
+    return json.dumps(
+        obj,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+        allow_nan=False,
+    ).encode("utf-8")
+
+
 @dataclass
 class Attestation:
     """A capability attestation issued by one agent to another.
@@ -385,9 +413,10 @@ class AttestationValidator:
         """Verify the Ed25519 signature of an attestation.
 
         The signed payload is ``to_dict()`` with the ``signature`` key
-        removed, serialized with ``json.dumps``. ``exclude`` is not a
-        ``json.dumps`` argument, so the field has to be dropped from the
-        dict before serialization.
+        removed, serialized with :func:`canonical_bytes`. The signature is
+        computed over exactly those bytes, so an issuer that reproduces the
+        documented canonical form (sorted keys, compact separators, UTF-8)
+        verifies regardless of the JSON encoder it used.
 
         ``signature`` arrives from a file the attacker can edit, so a verifier
         that answers a yes/no question has to be total over that input: every
@@ -410,8 +439,7 @@ class AttestationValidator:
             if key != "signature"
         }
         try:
-            data = json.dumps(body).encode()
-            public_key.verify(bytes.fromhex(signature), data)
+            public_key.verify(bytes.fromhex(signature), canonical_bytes(body))
             return True
         except (InvalidSignature, ValueError, TypeError):
             # TypeError is retained alongside the isinstance() guard on
@@ -421,9 +449,13 @@ class AttestationValidator:
 
 
 def compute_state_hash(capabilities: dict) -> str:
-    """Compute a deterministic hash of agent capabilities."""
-    canonical = json.dumps(capabilities, sort_keys=True).encode()
-    return f"sha256:{hashlib.sha256(canonical).hexdigest()}"
+    """Compute a deterministic hash of agent capabilities.
+
+    Uses :func:`canonical_bytes`, the same serialization the signature is
+    computed over, so the two can never disagree and the digest no longer
+    depends on ambient ``json.dumps`` defaults (separators, ``ensure_ascii``).
+    """
+    return f"sha256:{hashlib.sha256(canonical_bytes(capabilities)).hexdigest()}"
 
 
 def _as_utc(value: datetime) -> datetime:
