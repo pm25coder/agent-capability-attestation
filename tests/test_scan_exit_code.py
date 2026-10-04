@@ -89,6 +89,65 @@ class TestScanExitCode:
 
         assert result.exit_code == 1, result.output
 
+    def test_scan_exits_one_when_a_real_signature_covers_a_tampered_payload(
+        self, tmp_path
+    ):
+        """The forgery the CHANGELOG entry actually describes.
+
+        The test above supplies a signature no key can ever verify, so the
+        verdict it produces is 'no trusted key for this issuer' — the
+        *unverifiable* path. That is a real defect class, but it is not the one
+        this PR claims to fix: it cannot distinguish 'the verifier had nothing
+        to check against' from 'the verifier checked and the bytes did not
+        match'. Here the issuer's real public key is trusted and the signature
+        is valid over the original payload; the attacker then rewrites
+        ``capability`` on disk. That is the attack the signature exists to
+        stop, it produces the distinct
+        ``Signature does not match payload`` error, and before the fix it
+        exited 0.
+
+        Signing follows ``models.verify_signature``: the signed body is
+        ``to_dict()`` minus ``signature``, serialized with ``json.dumps``.
+        """
+        from cryptography.hazmat.primitives import serialization
+        from cryptography.hazmat.primitives.asymmetric import ed25519
+
+        from agent_capability_attestation.models import Attestation
+
+        key = ed25519.Ed25519PrivateKey.generate()
+        keyfile = tmp_path / "issuer-pubkey.hex"
+        keyfile.write_text(
+            key.public_key()
+            .public_bytes(
+                encoding=serialization.Encoding.Raw,
+                format=serialization.PublicFormat.Raw,
+            )
+            .hex()
+            + "\n"
+        )
+
+        honest = Attestation(
+            issuer="agent://planner-v2",
+            subject="agent://worker-v3",
+            capability="CAN_READ(db:orders)",
+            issued_at=datetime.now(timezone.utc) - timedelta(seconds=5),
+            ttl_seconds=120,
+        )
+        signed = honest.to_dict()
+        body = json.dumps({k: v for k, v in signed.items() if k != "signature"})
+        signed["signature"] = key.sign(body.encode()).hex()
+        # The attacker rewrites the capability after signing.
+        forged = dict(signed, capability="CAN_ADMIN(db:orders)")
+        (tmp_path / "forged.attestation.json").write_text(json.dumps(forged))
+
+        result = CliRunner().invoke(
+            cli,
+            ["scan", str(tmp_path), "--public-key-file", str(keyfile)],
+        )
+
+        assert "Signature does not match" in result.output, result.output
+        assert result.exit_code == 1, result.output
+
     def test_scan_exits_zero_when_every_attestation_is_valid(self, tmp_path):
         """Guard the guard: a clean directory must still pass the gate."""
         _fresh_unsigned(tmp_path)
