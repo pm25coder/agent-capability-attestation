@@ -26,10 +26,10 @@ from agent_capability_attestation.cli import cli
 from agent_capability_attestation.models import _scope_is_subscope
 
 
-def _hop(subject: str, capability: str, issued_at: str) -> dict:
-    """One live hop of a delegation chain."""
+def _hop(issuer: str, subject: str, capability: str, issued_at: str) -> dict:
+    """One live hop of a delegation chain, issued by ``issuer`` to ``subject``."""
     return {
-        "issuer": "agent://planner",
+        "issuer": issuer,
         "subject": subject,
         "capability": capability,
         "issued_at": issued_at,
@@ -38,14 +38,19 @@ def _hop(subject: str, capability: str, issued_at: str) -> dict:
 
 
 def _chain_file(tmp_path, parent: str, child: str, name="chain.json"):
-    """Write a two-hop chain delegating ``child`` out of ``parent``."""
+    """Write a two-hop chain delegating ``child`` out of ``parent``.
+
+    The hops are linked (the second is issued by the first's subject) so these
+    fixtures exercise the scope check alone; an unlinked chain is rejected for a
+    different reason and is covered in ``test_chain_linkage.py``.
+    """
     issued = (datetime.now(timezone.utc) - timedelta(seconds=5)).isoformat()
     path = tmp_path / name
     path.write_text(
         json.dumps(
             [
-                _hop("agent://worker", parent, issued),
-                _hop("agent://mallory", child, issued),
+                _hop("agent://planner", "agent://worker", parent, issued),
+                _hop("agent://worker", "agent://mallory", child, issued),
             ]
         )
     )

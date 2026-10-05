@@ -66,8 +66,20 @@ def _hop(subject: str, capability: str, issued_at: str, **extra) -> dict:
 
 
 def _chain(hops):
-    """Wrap ``hops`` as the JSON document ``check-chain`` expects."""
-    return hops
+    """Link ``hops`` as the delegation chain ``check-chain`` expects.
+
+    Each hop is issued by the previous hop's subject. The fixtures below are
+    about the time and monotonicity axes, not linkage — but a chain whose hops
+    do not delegate to one another is not a delegation chain, and ``check-chain``
+    now rejects it (#17), so these chains are built linked. The linkage defect
+    has its own tests in ``test_chain_linkage.py``.
+    """
+    linked = [dict(hops[0])]
+    for previous, hop in zip(hops, hops[1:]):
+        hop = dict(hop)
+        hop["issuer"] = previous["subject"]
+        linked.append(hop)
+    return linked
 
 
 def _fresh_chain(**hop_extra) -> list:
