@@ -77,6 +77,31 @@ def canonical_bytes(obj: dict) -> bytes:
     ).encode("utf-8")
 
 
+#: The fields every attestation document must carry. A document missing one of
+#: them is structurally malformed rather than stale or forged, so the CLI
+#: reports it as a bad input (exit 2) rather than as a failing attestation
+#: (exit 1) — the distinction ``McpConfigError`` already draws for a malformed
+#: MCP config, and the one the README's ``2 = malformed input`` line promises.
+REQUIRED_FIELDS = ("issuer", "subject", "capability", "issued_at")
+
+
+def json_type(value: object) -> str:
+    """Name a value's JSON type the way the CLI's error messages read it."""
+    if value is None:
+        return "null"
+    if isinstance(value, bool):  # before int: bool is an int subclass
+        return "boolean"
+    if isinstance(value, dict):
+        return "object"
+    if isinstance(value, list):
+        return "array"
+    if isinstance(value, str):
+        return "string"
+    if isinstance(value, (int, float)):
+        return "number"
+    return type(value).__name__
+
+
 @dataclass
 class Attestation:
     """A capability attestation issued by one agent to another.
@@ -100,7 +125,27 @@ class Attestation:
 
     @classmethod
     def from_dict(cls, data: dict) -> "Attestation":
-        """Parse from a JSON-serializable dictionary."""
+        """Parse from a JSON-serializable dictionary.
+
+        Validation happens here, once, so every caller — ``aca validate``,
+        ``check-chain``, ``check-mcp`` and ``scan`` — inherits it. Reading the
+        required fields by subscript without this guard let ``KeyError`` (a
+        missing key) and ``TypeError`` (a non-object payload) escape the
+        parser: an unhandled traceback whose exit code ``1`` is the very code a
+        genuine validation failure uses, so a malformed document was
+        indistinguishable from a stale or forged one. A ``ValueError`` is
+        raised instead, and the CLI maps it to exit 2 (bad input) — which is
+        what the README's ``2 = malformed input`` line already promises.
+        """
+        if not isinstance(data, dict):
+            raise ValueError(
+                f"Attestation must be a JSON object, got {json_type(data)}"
+            )
+        missing = [name for name in REQUIRED_FIELDS if name not in data]
+        if missing:
+            raise ValueError(
+                "Attestation is missing required field(s): " + ", ".join(missing)
+            )
         issued_at = _parse_datetime(data["issued_at"])
         declared_expires_at = data.get("expires_at")
         return cls(

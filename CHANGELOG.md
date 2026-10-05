@@ -40,6 +40,20 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- A malformed attestation payload is reported as a bad input — exit `2` — instead of
+  escaping as an unhandled traceback with exit `1`. `Attestation.from_dict` read
+  `issuer`, `subject`, `capability` and `issued_at` by subscript with no validation, so
+  a document that was not a JSON object, or that omitted a required field, raised
+  `KeyError` / `TypeError` out of the parser. `validate` and `check-chain` called it
+  outside any `try`, and `check-mcp` guarded every level of its walk except the
+  attestation element itself, so the process exited `1` — the code a genuine validation
+  failure uses — and a broken file could not be told apart from a stale or forged one.
+  The README already documents `2 = malformed input`; the payload was the one level
+  that did not honour it. `from_dict` now raises `ValueError` naming the problem, every
+  command maps it to exit `2` (and `check-chain` names the offending index), and `scan`
+  counts the files it could not read instead of dropping them from both its summary
+  line and its `--json-output` list (#44).
+
 - A declared `expires_at` can no longer extend an attestation's life past
   `issued_at + ttl_seconds`. The field is attacker-controlled — it is one of the
   values an editor of the file chooses — and it was used as *the* deadline, so an
