@@ -54,6 +54,19 @@ All notable changes to this project will be documented in this file.
   counts the files it could not read instead of dropping them from both its summary
   line and its `--json-output` list (#44).
 
+- `ttl_seconds` is type-checked, so a non-integer value is a bad input — exit `2` — instead
+  of an unhandled `TypeError` with exit `1`, which is what the field produced through
+  `validate`, `check-chain` and `check-mcp` alike. A JSON string, `null`, array or object
+  reached `timedelta(seconds=...)` and the `<= 0` comparison with no check between them; a
+  boolean was worse, because Python's `bool` subclasses `int`, so `ttl_seconds: true` was
+  read as the integer `1` and a one-second TTL was then *validated* — a wrong answer rather
+  than an error. The check runs in `__post_init__`, the value's point of use, so it covers
+  every path into the model rather than only `from_dict`, and the message names the field
+  and the type received. An integer is accepted whatever its sign: `0` and a negative still
+  reach `validate`'s `<= 0` branch and are reported as missing TTL (exit `1`), a verdict on
+  a well-formed attestation rather than a malformed document, and an integral float
+  (`300.0`) is accepted verbatim (#48).
+
 - A declared `expires_at` can no longer extend an attestation's life past
   `issued_at + ttl_seconds`. The field is attacker-controlled — it is one of the
   values an editor of the file chooses — and it was used as *the* deadline, so an

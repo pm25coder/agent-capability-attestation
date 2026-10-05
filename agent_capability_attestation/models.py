@@ -102,6 +102,42 @@ def json_type(value: object) -> str:
     return type(value).__name__
 
 
+def _require_integer_ttl(value: object) -> None:
+    """Reject a ``ttl_seconds`` the TTL arithmetic cannot use.
+
+    ``ttl_seconds`` was read with no type check, so a value of the wrong type
+    reached the two places that use it — ``timedelta(seconds=...)`` in
+    ``__post_init__`` and the ``<= 0`` comparison in ``validate`` — and both
+    raised ``TypeError``: an unhandled traceback whose exit code ``1`` is the
+    code a *stale* attestation uses, so a malformed document was
+    indistinguishable from an expired one. A JSON boolean was worse than an
+    escape: ``bool`` subclasses ``int`` in Python, so ``true`` was read as the
+    integer ``1`` and a one-second TTL was then *validated* — a wrong answer
+    with no error at all, which is the harder failure to notice of the two.
+
+    The check is on the type, because that is the defect: those shapes are the
+    ones the arithmetic either cannot use or silently reinterprets. A float is
+    accepted only when it has no fractional part, so ``300.0`` — the integer
+    ``300`` written by an encoder that emits floats — still parses, while
+    ``300.5`` is rejected by value rather than described as "a number".
+
+    The *sign* is deliberately not checked here. ``ttl_seconds: 0`` and a
+    negative value are integers, and they reach ``validate``'s ``<= 0`` branch,
+    which already reports them as missing TTL — exit ``1``, an invalid
+    attestation. The README states that as a rule about the document ("TTL must
+    be present and positive"), so it is a verdict on a well-formed attestation;
+    this function is about documents that are not well-formed at all.
+    """
+    if isinstance(value, bool) or not (
+        isinstance(value, int) or (isinstance(value, float) and value.is_integer())
+    ):
+        named = json_type(value)
+        if isinstance(value, float):
+            # "got number" would be actively unhelpful for a value that is one.
+            named = f"{named} ({value!r})"
+        raise ValueError(f"ttl_seconds must be an integer, got {named}")
+
+
 @dataclass
 class Attestation:
     """A capability attestation issued by one agent to another.
@@ -129,7 +165,17 @@ class Attestation:
     _raw: Optional[dict] = field(default=None, repr=False, compare=False)
 
     def __post_init__(self) -> None:
-        if self.expires_at is None and self.ttl_seconds is not None:
+        # ``ttl_seconds`` is checked here — its point of use — rather than in
+        # ``from_dict``. The two below are the only places the value is read,
+        # and this is the first of them; checking at construction covers every
+        # path into the model, so ``from_dict``, the synthetic attestation
+        # ``mcp_scanner`` builds and a caller constructing one directly all get
+        # the same rejection. It is also what lets ``validate`` keep the promise
+        # its docstring makes — that it returns a result rather than raising —
+        # since an attestation whose TTL the arithmetic cannot use can no
+        # longer be built in the first place.
+        _require_integer_ttl(self.ttl_seconds)
+        if self.expires_at is None:
             self.expires_at = self.issued_at + timedelta(seconds=self.ttl_seconds)
 
     @classmethod
@@ -145,6 +191,14 @@ class Attestation:
         indistinguishable from a stale or forged one. A ``ValueError`` is
         raised instead, and the CLI maps it to exit 2 (bad input) — which is
         what the README's ``2 = malformed input`` line already promises.
+
+        What this guard answers is *presence*. The remaining required-field
+        check is a type check, and it lives at the field's point of use:
+        ``ttl_seconds`` is rejected by ``__post_init__`` (see
+        :func:`_require_integer_ttl`), which this constructor routes through,
+        so a malformed TTL is reported the same way a missing ``issued_at`` is
+        — and a caller that builds an attestation without calling this method
+        still gets it.
         """
         if not isinstance(data, dict):
             raise ValueError(
