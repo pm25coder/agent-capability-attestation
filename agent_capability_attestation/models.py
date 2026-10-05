@@ -138,6 +138,48 @@ def _require_integer_ttl(value: object) -> None:
         raise ValueError(f"ttl_seconds must be an integer, got {named}")
 
 
+def _require_string(value: object, field: str) -> None:
+    """Reject an identity field the tool's string operations cannot use.
+
+    ``issuer``, ``subject`` and ``capability`` were read with no type check, and
+    each one is used somewhere as a string. A non-string ``capability`` reached
+    ``_scope_is_subscope``, whose first acts are ``parent.endswith("*")`` and
+    ``child.startswith(...)``: ``check-chain`` escaped as an unhandled
+    ``AttributeError`` and exited ``1`` — the code a *stale hop* uses, so a
+    malformed document was again indistinguishable from an expired one. A
+    non-string ``issuer`` reaches the trusted-key lookup, where an unhashable
+    value (``[]``/``{}``) raises ``TypeError`` from ``dict.get``.
+
+    Unlike ``ttl_seconds``, no shape of these fields ever yields a correct
+    verdict — there is no "rule about a well-formed document" fallback the way
+    a signed integer has — so the check is on the value itself and a non-string
+    is malformed *input* (exit ``2``), never an invalid attestation.
+
+    Empty strings are deliberately left alone: ``""`` is a string, and the
+    defect here is the type the string operations cannot use. Whether an empty
+    issuer is meaningless is a separate rule about a well-formed document;
+    folding it in would widen this change past the class the issue names.
+    """
+    if not isinstance(value, str):
+        raise ValueError(f"{field} must be a string, got {json_type(value)}")
+
+
+def _require_string_list(value: object, field: str) -> None:
+    """Reject a field the schema documents as a list of strings.
+
+    ``provenance`` is covered by the signature and the README's schema shows it
+    as an array of agent URIs. A non-list, or a list holding a non-string, is
+    the same class of defect as a non-string ``capability``: a shape no correct
+    verdict is ever computed from, so it is malformed input rather than a
+    failing attestation.
+    """
+    if not isinstance(value, list):
+        raise ValueError(f"{field} must be a list of strings, got {json_type(value)}")
+    for item in value:
+        if not isinstance(item, str):
+            raise ValueError(f"{field} must contain only strings, got {json_type(item)}")
+
+
 @dataclass
 class Attestation:
     """A capability attestation issued by one agent to another.
@@ -165,6 +207,25 @@ class Attestation:
     _raw: Optional[dict] = field(default=None, repr=False, compare=False)
 
     def __post_init__(self) -> None:
+        # The identity fields are checked here — their point of use — for the
+        # same reason ``ttl_seconds`` is (see :func:`_require_integer_ttl`):
+        # construction is the one place every path into the model passes
+        # through, so ``from_dict``, the synthetic attestation ``mcp_scanner``
+        # builds and a caller constructing one directly all get the same
+        # rejection. The values are used as strings (a dict key in the
+        # trusted-key lookup, string methods in ``_scope_is_subscope``, the
+        # printed identity), and a value of the wrong type is malformed input
+        # rather than an invalid attestation — there is no non-string value any
+        # check would call correct, which is what separates these fields from
+        # the ``ttl_seconds`` sign rule.
+        _require_string(self.issuer, "issuer")
+        _require_string(self.subject, "subject")
+        _require_string(self.capability, "capability")
+        if self.state_hash is not None:
+            # Optional, and ``None`` is how "absent" reaches the model; only a
+            # present value is required to be the string the schema documents.
+            _require_string(self.state_hash, "state_hash")
+        _require_string_list(self.provenance, "provenance")
         # ``ttl_seconds`` is checked here — its point of use — rather than in
         # ``from_dict``. The two below are the only places the value is read,
         # and this is the first of them; checking at construction covers every
@@ -192,13 +253,15 @@ class Attestation:
         raised instead, and the CLI maps it to exit 2 (bad input) — which is
         what the README's ``2 = malformed input`` line already promises.
 
-        What this guard answers is *presence*. The remaining required-field
-        check is a type check, and it lives at the field's point of use:
-        ``ttl_seconds`` is rejected by ``__post_init__`` (see
-        :func:`_require_integer_ttl`), which this constructor routes through,
-        so a malformed TTL is reported the same way a missing ``issued_at`` is
-        — and a caller that builds an attestation without calling this method
-        still gets it.
+        What this guard answers is *presence*. The remaining checks are type
+        checks, and they live at each field's point of use: ``ttl_seconds`` is
+        rejected by ``__post_init__`` (see :func:`_require_integer_ttl`), as are
+        the identity fields ``issuer``, ``subject``, ``capability``,
+        ``state_hash`` and ``provenance`` (see :func:`_require_string` and
+        :func:`_require_string_list`). This constructor routes through that
+        method, so a value of the wrong type is reported the same way a missing
+        ``issued_at`` is — and a caller that builds an attestation without
+        calling this method still gets it.
         """
         if not isinstance(data, dict):
             raise ValueError(
