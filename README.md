@@ -174,6 +174,29 @@ $ echo $?
 1
 ```
 
+### What exactly is signed
+
+That same error is what an issuer sees when they sign the *right* payload the *wrong* way, so
+the bytes are worth stating exactly rather than leaving to be inferred. The signature covers
+the canonical serialization of every field except `signature` — **keys sorted, no
+insignificant whitespace, UTF-8** — which is the byte string `canonical_bytes()` produces. It
+is exported from the package so an issuer signs precisely what the verifier hashes:
+
+```python
+from agent_capability_attestation import canonical_bytes
+
+body = {k: v for k, v in attestation.to_dict().items() if k != "signature"}
+signature = private_key.sign(canonical_bytes(body)).hex()
+```
+
+Sign the payload with a plain `json.dumps(body)` instead — no `sort_keys`, and the default
+`", "` / `": "` spacing — and validation reports the signature as unverified, with the very
+same `attestation may be forged` line it prints for a tampered payload. The message cannot
+tell a wrong serialization from a forgery apart, which is why the contract is stated here
+rather than in the error: the `ed25519:` prefix in the [Attestation
+Schema](#attestation-schema) names the algorithm, and `canonical_bytes` fixes the bytes that
+algorithm signs.
+
 `--public-key-file` takes the issuer's Ed25519 public key as 64 hex characters, which is
 what `public_bytes(Encoding.Raw, PublicFormat.Raw).hex()` produces:
 

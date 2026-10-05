@@ -29,6 +29,15 @@ All notable changes to this project will be documented in this file.
 - `--json-output` includes `signature_status`.
 - A non-stale invalid attestation now prints `✗ INVALID` instead of `✗ STALE`.
 
+- The `README`'s Signature Verification section now states the signing contract: the signed
+  bytes are the canonical serialization of every field except `signature` — sorted keys, no
+  insignificant whitespace, UTF-8, i.e. `canonical_bytes()` — cross-linked to the `ed25519:`
+  prefix in the schema. The section previously named the fields but not the serialization, so
+  an issuer written from the README alone signed `json.dumps(body)` and was told its
+  attestation "may be forged" — the one diagnosis the section gave no way to rule out. A new
+  `tests/test_readme_signing_contract.py` runs the recipe the section shows, so the section
+  cannot silently drift back to describing the fields without the bytes (#41).
+
 ### Fixed
 
 - A declared `expires_at` can no longer extend an attestation's life past
