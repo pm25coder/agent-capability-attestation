@@ -15,6 +15,7 @@ from .mcp_scanner import check_mcp as scan_mcp_config
 from .models import (
     ANY_ISSUER,
     DEFAULT_MAX_SKEW_SECONDS,
+    SIGNATURE_UNCHECKED,
     SIGNATURE_UNSIGNED,
     SIGNATURE_UNVERIFIED,
     SIGNATURE_VERIFIED,
@@ -96,7 +97,7 @@ def validate(
 ) -> None:
     """Validate a single attestation file."""
     data = _load_json(file)
-    attestation = Attestation.from_dict(data)
+    attestation = _parse_attestation(data)
 
     validator = _build_validator(
         max_ttl,
@@ -177,6 +178,11 @@ def scan(
         sys.exit(0)
 
     results = []
+    # Files that could not be read at all (bad JSON, or a malformed attestation
+    # payload). They are kept out of ``results`` — there is no verdict to give —
+    # but they must not vanish from the readings: the summary count describes
+    # the directory, and it used to name only the files it managed to parse.
+    unreadable: list[tuple[Path, str]] = []
     all_valid = True
 
     validator = _build_validator(
@@ -197,19 +203,26 @@ def scan(
                 all_valid = False
         except Exception as e:
             click.echo(f"ERROR reading {f}: {e}", err=True)
+            unreadable.append((f, str(e)))
             all_valid = False
 
     if json_output:
-        click.echo(json.dumps([_result_to_dict(r) for r in results], indent=2))
+        entries = [_result_to_dict(r) for r in results]
+        entries += [_unreadable_to_dict(f, msg) for f, msg in unreadable]
+        click.echo(json.dumps(entries, indent=2))
     else:
         for result in results:
             _print_result(result)
         invalid = [r for r in results if not r.is_valid]
-        click.echo(
-            f"\n{len(results)} attestations scanned, "
-            f"{len(invalid)} invalid "
+        scanned = len(results) + len(unreadable)
+        summary = (
+            f"\n{scanned} attestations scanned, "
+            f"{len(invalid) + len(unreadable)} invalid "
             f"({sum(1 for r in invalid if r.is_stale)} stale)"
         )
+        if unreadable:
+            summary += f", {len(unreadable)} unreadable"
+        click.echo(summary)
 
     # The default is fail-closed. Before this, --fail-on-stale was the *only*
     # way to make a scan fail: a forged or unverifiable attestation printed
@@ -250,7 +263,19 @@ def check_chain(
         click.echo("ERROR: delegation chain must be a JSON array", err=True)
         sys.exit(2)
 
-    attestations = [Attestation.from_dict(item) for item in data]
+    # The chain *element* is the level a malformed document hides at: the list
+    # itself is checked above, but each item was parsed unchecked, so an element
+    # missing a required field escaped as a traceback and exit 1 — the code a
+    # genuinely invalid chain uses. Naming the index is what lets an operator
+    # find the offending hop.
+    attestations = []
+    for index, item in enumerate(data):
+        try:
+            attestations.append(Attestation.from_dict(item))
+        except ValueError as e:
+            click.echo(f"ERROR: chain[{index}]: {e}", err=True)
+            sys.exit(2)
+
     chain = DelegationChain(attestations=attestations)
     validator = _build_validator(
         max_ttl,
@@ -389,6 +414,42 @@ def _load_json(path: str) -> dict:
     except json.JSONDecodeError as e:
         click.echo(f"ERROR: invalid JSON in {path}: {e}", err=True)
         sys.exit(2)
+
+
+def _parse_attestation(data) -> Attestation:
+    """Parse one attestation document, reporting a malformed one as exit 2.
+
+    ``Attestation.from_dict`` raises ``ValueError`` for a payload that is not a
+    JSON object or that omits a required field. That is a bad *input*, not a
+    failing attestation, so it must exit 2 — the code the README documents for
+    malformed input — rather than escaping as an unhandled traceback whose exit
+    code 1 means "this attestation is invalid".
+    """
+    try:
+        return Attestation.from_dict(data)
+    except ValueError as e:
+        click.echo(f"ERROR: {e}", err=True)
+        sys.exit(2)
+
+
+def _unreadable_to_dict(path: Path, message: str) -> dict:
+    """A scan entry for a file that could not be read at all.
+
+    ``scan --json-output`` used to emit an entry only for the files it managed
+    to parse, so a malformed file left no trace in the document and a consumer
+    reading it saw a smaller directory than the disk holds. This entry keeps
+    the JSON list and the summary count describing the same set of files.
+    """
+    return {
+        "file": str(path),
+        "is_valid": False,
+        "is_stale": False,
+        "stale_by_seconds": None,
+        "signature_status": SIGNATURE_UNCHECKED,
+        "errors": [message],
+        "warnings": [],
+        "unreadable": True,
+    }
 
 
 def _output_json(result: ValidationResult) -> None:

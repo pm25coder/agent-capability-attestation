@@ -11,6 +11,7 @@ from .models import (
     Attestation,
     AttestationValidator,
     ValidationResult,
+    json_type,
 )
 
 
@@ -24,23 +25,6 @@ class McpConfigError(ValueError):
     indistinguishable from a stale one. The CLI maps this error to exit 2,
     which is what its other malformed-input paths already report.
     """
-
-
-def _json_type(value: Any) -> str:
-    """Name a value's JSON type the way the messages above read it."""
-    if value is None:
-        return "null"
-    if isinstance(value, bool):
-        return "boolean"
-    if isinstance(value, dict):
-        return "object"
-    if isinstance(value, list):
-        return "array"
-    if isinstance(value, str):
-        return "string"
-    if isinstance(value, (int, float)):
-        return "number"
-    return type(value).__name__
 
 
 def check_mcp(
@@ -68,7 +52,7 @@ def check_mcp(
     data = json.loads(path.read_text())
     if not isinstance(data, dict):
         raise McpConfigError(
-            f"MCP config must be a JSON object, got {_json_type(data)}"
+            f"MCP config must be a JSON object, got {json_type(data)}"
         )
     results = []
     validator = AttestationValidator(
@@ -86,14 +70,14 @@ def check_mcp(
     if not isinstance(servers, dict):
         raise McpConfigError(
             f'MCP config "{servers_key}" must be a JSON object, '
-            f"got {_json_type(servers)}"
+            f"got {json_type(servers)}"
         )
 
     for server_name, server_config in servers.items():
         if not isinstance(server_config, dict):
             raise McpConfigError(
                 f'MCP server "{server_name}" must be a JSON object, '
-                f"got {_json_type(server_config)}"
+                f"got {json_type(server_config)}"
             )
         att_data = server_config.get("capabilityAttestation")
         if att_data is None:
@@ -112,7 +96,21 @@ def check_mcp(
             results.append(result)
             continue
 
-        att = Attestation.from_dict(att_data)
+        try:
+            att = Attestation.from_dict(att_data)
+        except ValueError as e:
+            # The last level of the walk is the one that carries
+            # attacker-supplied content, and it was the one level left
+            # unguarded: a malformed ``capabilityAttestation`` escaped as an
+            # uncaught ``KeyError`` / ``TypeError`` and the process exited 1 —
+            # the code a stale attestation uses — while the container levels
+            # above it already reported exit 2. Raising the typed error keeps
+            # the two apart, and it is a ``ValueError`` subclass so a caller
+            # that already catches ``ValueError`` still works.
+            raise McpConfigError(
+                f'MCP server "{server_name}" has a malformed '
+                f'"capabilityAttestation": {e}'
+            ) from e
         result = validator.validate(att)
         results.append(result)
 
