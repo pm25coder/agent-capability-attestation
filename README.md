@@ -17,12 +17,16 @@ When Agent A delegates a task to Agent B, the capability attestation that author
 
 `agent-capability-attestation` validates that agent capability attestations:
 
-1. **Carry TTL metadata** — every attestation must include `{capability, agent_state_hash, timestamp, ttl}`
+1. **Carry TTL metadata** — every attestation must include `{issuer, subject, capability, issued_at, ttl_seconds}`
 2. **Are fresh** — TTL must not have expired at validation time
-3. **Match the current agent state** — the state hash must match the agent's current declared capabilities
+3. **Verify the signature** — an Ed25519 signature over the payload must check out against a
+   trusted key; a payload tampered with after signing is rejected
 4. **Delegate monotonically** — each hop in a delegation chain must narrow (never expand) the scope
 5. **Fail closed** — missing TTL = expired attestation (assume stale unless freshly attested),
    and a life longer than the configured `--max-ttl` ceiling is rejected rather than noted
+
+`state_hash` is carried in the schema and covered by the signature, but nothing compares it to a
+live agent state yet — see the roadmap below.
 
 ## Installation
 
@@ -202,7 +206,8 @@ what `public_bytes(Encoding.Raw, PublicFormat.Raw).hex()` produces:
 
 ```bash
 # Publish the key (issuer side)
-python -c "import json,serialization; from cryptography.hazmat.primitives.asymmetric import ed25519; \
+python -c "from cryptography.hazmat.primitives import serialization; \
+from cryptography.hazmat.primitives.asymmetric import ed25519; \
 print(ed25519.Ed25519PublicKey.from_private_bytes(open('issuer.key','rb').read()).public_bytes( \
 encoding=serialization.Encoding.Raw, format=serialization.PublicFormat.Raw).hex())" > issuer-pubkey.hex
 
@@ -287,7 +292,8 @@ if result.signature_status != "verified":
 ## Roadmap
 
 - [ ] A2A protocol integration (validate Agent Card capability declarations)
-- [ ] MCP server capability scanning
+- [x] MCP server capability scanning (`aca check-mcp`)
+- [ ] Compare `state_hash` against a live agent state
 - [ ] Delegation chain visualization
 - [ ] SARIF output for GitHub Code Scanning
 - [ ] Policy engine integration (OPA/Rego)
@@ -296,7 +302,3 @@ if result.signature_status != "verified":
 ## License
 
 MIT
-
-# Agent Capability Attestation
-
-![CI](https://github.com/yunaremaia/agent-capability-attestation/actions/workflows/ci.yml/badge.svg)
