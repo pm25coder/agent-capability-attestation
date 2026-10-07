@@ -115,6 +115,10 @@ def _require_integer_ttl(value: object) -> None:
     integer ``1`` and a one-second TTL was then *validated* — a wrong answer
     with no error at all, which is the harder failure to notice of the two.
 
+    This function answers *type*, and only type; whether the arithmetic can
+    represent an integer of that magnitude is :func:`_deadline`'s question. The
+    two are separate dimensions of the same field and #48 closed only the first.
+
     The check is on the type, because that is the defect: those shapes are the
     ones the arithmetic either cannot use or silently reinterprets. A float is
     accepted only when it has no fractional part, so ``300.0`` — the integer
@@ -136,6 +140,39 @@ def _require_integer_ttl(value: object) -> None:
             # "got number" would be actively unhelpful for a value that is one.
             named = f"{named} ({value!r})"
         raise ValueError(f"ttl_seconds must be an integer, got {named}")
+
+
+def _deadline(issued_at: datetime, seconds: int, field: str = "ttl_seconds") -> datetime:
+    """Return ``issued_at + seconds``, rejecting a deadline that cannot exist.
+
+    ``ttl_seconds`` is checked for *type* by :func:`_require_integer_ttl`, and a
+    type-correct integer still has a magnitude the deadline arithmetic cannot
+    represent. ``timedelta(seconds=...)`` accepts only what fits in a C int, and
+    the ``datetime`` sum accepts only a year in ``1..9999``, so ``1e30`` fails in
+    the first operation and ``999999999999`` — comfortably inside
+    ``timedelta``'s range, and only ~31 700 years past the epoch — fails in the
+    second. Both escaped as an unhandled ``OverflowError`` whose exit code ``1``
+    is the code a *stale* attestation uses, so a malformed document was again
+    indistinguishable from an expired one: the same conflation #44 and #48 each
+    closed one dimension of.
+
+    The bound is therefore on the **computation**, not on the number. No constant
+    ceiling can be checked here, because whether a value is representable depends
+    on ``issued_at`` as well: ``ttl_seconds: 86400`` is fine from today's clock
+    and out of range from ``9999-12-31``.
+
+    ``ValueError`` is raised rather than ``OverflowError``/``OSError`` because it
+    is the exception every caller already maps to exit ``2`` — ``from_dict``'s
+    guard, the ``check-chain`` element loop and ``McpConfigError`` — so no caller
+    needs a new ``except`` clause.
+    """
+    try:
+        return issued_at + timedelta(seconds=seconds)
+    except (OverflowError, OSError, ValueError) as exc:
+        raise ValueError(
+            f"{field} {seconds} is out of range for a deadline from "
+            f"issued_at {issued_at.isoformat()}: {exc}"
+        ) from exc
 
 
 def _require_string(value: object, field: str) -> None:
@@ -236,8 +273,16 @@ class Attestation:
         # since an attestation whose TTL the arithmetic cannot use can no
         # longer be built in the first place.
         _require_integer_ttl(self.ttl_seconds)
+        # The TTL-derived deadline is computed unconditionally, not only when
+        # ``expires_at`` is absent. It is the one bound ``validate`` recomputes
+        # for *every* attestation, so a ``ttl_seconds`` the arithmetic cannot
+        # represent has to fail here — where every caller maps it to exit ``2`` —
+        # rather than there, mid-validation and after the model was accepted.
+        # Computed rather than bounded by a constant because whether a value is
+        # representable depends on ``issued_at`` too (see :func:`_deadline`).
+        ttl_deadline = _deadline(self.issued_at, self.ttl_seconds)
         if self.expires_at is None:
-            self.expires_at = self.issued_at + timedelta(seconds=self.ttl_seconds)
+            self.expires_at = ttl_deadline
 
     @classmethod
     def from_dict(cls, data: dict) -> "Attestation":
@@ -511,7 +556,20 @@ class AttestationValidator:
             )
             return result
 
-        ttl_deadline = issued_at + timedelta(seconds=attestation.ttl_seconds)
+        # Construction computes this same sum unconditionally (#53), so a
+        # representable ``ttl_seconds`` is guaranteed by the time any attestation
+        # exists and the branch below is unreachable through ``from_dict``, a
+        # direct construction or the scanner's synthetic attestation. It is kept
+        # non-raising all the same, for the reason the ceiling further down is:
+        # ``validate`` promises a result rather than a traceback, and the one
+        # caller that can hold a model whose field was re-pointed after
+        # construction — the dataclass is mutable — must get a verdict, not a
+        # crash.
+        try:
+            ttl_deadline = _deadline(issued_at, attestation.ttl_seconds)
+        except ValueError as exc:
+            result.add_error(f"{exc} — rejecting")
+            return result
         if deadline > ttl_deadline:
             result.add_error(
                 f"expires_at {deadline.isoformat()} outlives the TTL deadline "
@@ -539,8 +597,20 @@ class AttestationValidator:
         # rejecting such an attestation would undo that rule. An attestation
         # whose *life* is inside the ceiling is inside the ceiling, whatever
         # its TTL field says.
-        policy_deadline = issued_at + timedelta(seconds=self.max_ttl)
-        if deadline > policy_deadline:
+        # The ceiling is the third place in this package that adds a number of
+        # seconds to ``issued_at``, and it is reachable with an unusable value:
+        # ``--max-ttl 99999999999999999`` overflows the same arithmetic that
+        # ``ttl_seconds`` did. A ceiling the arithmetic cannot represent is not a
+        # ceiling — no representable deadline exceeds it — so the comparison
+        # below is vacuous rather than fatal. Raising here would be the one spot
+        # in ``validate`` that breaks its "returns a result" contract, and it
+        # would escape the CLI unguarded, reintroducing in the fix the exit-1
+        # traceback the fix exists to remove.
+        try:
+            policy_deadline = _deadline(issued_at, self.max_ttl, "max_ttl")
+        except ValueError:
+            policy_deadline = None
+        if policy_deadline is not None and deadline > policy_deadline:
             message = (
                 f"TTL {attestation.ttl_seconds}s exceeds max {self.max_ttl}s — "
                 f"expires_at {deadline.isoformat()} is "
