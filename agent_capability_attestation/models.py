@@ -408,6 +408,13 @@ class DelegationChain:
     ) -> list[ValidationResult]:
         """Verify each hop narrows (never expands) the capability scope.
 
+        Two chain-level rules are checked between consecutive hops, in addition
+        to the per-hop verdict: hop ``i`` must be **issued by** hop ``i-1``'s
+        subject (a chain whose hops do not delegate to one another is not a
+        chain, however well-formed each hop is), and its capability must be a
+        subscope of its parent's. Both are needed — a linked chain can still
+        widen the authority, and a widening hop can still be linked.
+
         When a ``validator`` is supplied, every hop is also run through
         ``validator.validate()`` — the full single-attestation check covering
         the TTL floor, the declared ``expires_at``, staleness, the
@@ -446,6 +453,13 @@ class DelegationChain:
                 result = validator.validate(att)
             if i > 0:
                 parent = self.attestations[i - 1]
+                if att.issuer != parent.subject:
+                    result.add_error(
+                        f"Hop {i}: issuer {att.issuer!r} is not the previous "
+                        f"hop's subject {parent.subject!r} — the chain is not "
+                        "linked, so this hop does not delegate the previous "
+                        "hop's authority"
+                    )
                 if not _scope_is_subscope(parent.capability, att.capability):
                     result.add_error(
                         f"Hop {i}: capability expanded — "
@@ -810,8 +824,12 @@ def _scope_is_subscope(parent: str, child: str) -> bool:
     # Wildcard, bounded by its own prefix so the namespace cannot be crossed.
     if p_res.endswith("*"):
         return c_res.startswith(p_res[:-1])
-    # Direct prefix match
-    if c_res.startswith(p_res):
+    # Prefix only where the remainder starts a new segment: ``store:`` covers
+    # ``store:read`` (the namespace is a boundary), but ``db:read`` must not
+    # cover ``db:readwrite`` and ``store`` must not cover ``storefront:delete``
+    # — a textual extension is not a narrowing. An empty ``p_res`` is already
+    # rejected above, so the boundary character is well defined.
+    if c_res.startswith(p_res) and c_res[len(p_res):len(p_res) + 1] in (":", "/", "*"):
         return True
     # Check if child's scope is a subset of parent's, within the same namespace.
     p_ns, _, p_seg = p_res.rpartition(":")
